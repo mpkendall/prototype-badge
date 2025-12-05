@@ -500,8 +500,8 @@
       "gencad": "",
       "idf": "",
       "netlist": "",
-      "plot": "",
-      "pos_files": "",
+      "plot": "production/",
+      "pos_files": "production/",
       "specctra_dsn": "",
       "step": "",
       "svg": "",
@@ -524,7 +524,7 @@
     },
     "bom_presets": [],
     "bom_settings": {
-      "exclude_dnp": false,
+      "exclude_dnp": true,
       "fields_ordered": [
         {
           "group_by": false,
