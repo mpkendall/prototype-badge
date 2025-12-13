@@ -123,41 +123,21 @@ class MicroPythonWrapper {
         return await this.uploadFile(path, bytes, reporter, perChunkTimeout);
     }
 
-    async uploadFile(path: string, content: Uint8Array, reporter?: (uploaded: number, total: number) => void, perChunkTimeout = 15000) {
-        // Reduce chunk size to avoid REPL command length limits; run reporter in between
-        const CHUNK_SIZE = 128;
+    async uploadFile(path: string, content: Uint8Array, reporter?: (uploaded: number, total: number) => void, _perChunkTimeout?: number) {
+        const safePath = path.replace(/'/g, "\\'");
+        // Fast upload implementation (based on shipwrecked webflasher behavior)
+        const CHUNK_SIZE = 512; // larger chunk size to speed up transfers
+        reporter = reporter || (() => false);
         await this.getPrompt();
         await this.enterRawRepl();
         try {
-            await this.executeRaw(`f=open('${path}','wb')\nw=f.write`);
+            await this.executeRaw(`f=open('${safePath}','wb')\nw=f.write`);
             for (let i = 0; i < content.byteLength; i += CHUNK_SIZE) {
-            const chunk = new Uint8Array(content.slice(i, i + CHUNK_SIZE));
-            // Retry each chunk to avoid being stuck on transient errors
-            const retries = 3;
-            let lastErr: any = null;
-            for (let attempt = 0; attempt < retries; attempt++) {
-                try {
-                    const writePromise = this.executeRaw(`w(bytes([${Array.from(chunk).join(',')}]))`);
-                    await Promise.race([
-                        writePromise,
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('Chunk timeout')), perChunkTimeout))
-                    ]);
-                    lastErr = null;
-                    break;
-                } catch (err) {
-                    lastErr = err;
-                    // small backoff
-                    await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
-                }
-            }
-            if (lastErr) {
-                throw new Error(`Failed to write chunk after ${retries} attempts: ${lastErr}`);
-            }
-            if (reporter) {
-                reporter(Math.min(i + CHUNK_SIZE, content.byteLength), content.byteLength);
-            }
-            // small pause to allow the device to process and not overflow buffers
-            await new Promise((r) => setTimeout(r, 10));
+                const chunk = new Uint8Array(content.slice(i, i + CHUNK_SIZE));
+                await this.executeRaw(`w(bytes([${Array.from(chunk).join(',')}]))`);
+                if (reporter) reporter(Math.min(i + CHUNK_SIZE, content.byteLength), content.byteLength);
+                // small pause to allow the device to process and not overflow buffers
+                await new Promise((r) => setTimeout(r, 5));
             }
             await this.executeRaw('f.close()');
         } finally {
@@ -166,25 +146,38 @@ class MicroPythonWrapper {
     }
 
     async createFolder(path: string) {
+        const safePath = path.replace(/'/g, "\\'");
         await this.getPrompt();
         await this.enterRawRepl();
-        await this.executeRaw(`import os;os.mkdir('${path}')`);
+        // Create parent folders if necessary by iterating path segments
+        const code = `def mkdirs(p):\n  import uos\n  parts = [x for x in p.split('/') if x]\n  cur = ''\n  for part in parts:\n    cur += '/' + part\n    try:\n      uos.mkdir(cur)\n    except OSError:\n      pass\n\nmkdirs('${safePath}')`;
+        await this.executeRaw(code);
         await this.exitRawRepl();
     }
 
     // Download file to string by using helper b2a_base64 method then decoding
     async runHelper() {
-        const HELPER_CODE = `import os\nimport json\nimport ubinascii\n\ndef b2a_base64(data):\n  import ubinascii\n  return ubinascii.b2a_base64(data)\n`; // minimal
+        const HELPER_CODE = `import os\nimport json\nimport ubinascii\n\nos.chdir('/')\n\ndef is_directory(path):\n  return True if os.stat(path)[0] == 0x4000 else False\n\ndef get_all_files(path, array_of_files = []):\n  files = os.ilistdir(path)\n  for file in files:\n    is_folder = file[1] == 16384\n    p = path + '/' + file[0]\n    array_of_files.append({"path": p, "type": "folder" if is_folder else "file"})\n    if is_folder:\n        array_of_files = get_all_files(p, array_of_files)\n  return array_of_files\n\ndef ilist_all(path):\n  print(json.dumps(get_all_files(path)))\n\ndef delete_folder(path):\n  files = get_all_files(path)\n  for file in files:\n    if file['type'] == 'file':\n        os.remove(file['path'])\n  for file in reversed(files):\n    if file['type'] == 'folder':\n        os.rmdir(file['path'])\n  # Avoid attempting to remove root path\n  if path != '/':\n    try:\n      os.rmdir(path)\n    except OSError:\n      pass\n\ndef b2a_base64(data):\n  import ubinascii\n  return ubinascii.b2a_base64(data)\n`;
         await this.getPrompt();
         await this.enterRawRepl();
         await this.executeRaw(HELPER_CODE);
         await this.exitRawRepl();
     }
 
+    async removeFolder(path: string) {
+        const safePath = path.replace(/'/g, "\\'");
+        await this.getPrompt();
+        await this.runHelper();
+        await this.enterRawRepl();
+        await this.executeRaw(`delete_folder('${safePath}')`);
+        await this.exitRawRepl();
+    }
+
     async downloadFileToString(path: string) {
         await this.runHelper();
         await this.enterRawRepl();
-        const out = await this.executeRaw(`with open('${path}','rb') as f:\n  b = b2a_base64(f.read())\n  for i in b:\n    print(chr(i), end='')`);
+        const safePath = path.replace(/'/g, "\\'");
+        const out = await this.executeRaw(`with open('${safePath}','rb') as f:\n  b = b2a_base64(f.read())\n  for i in b:\n    print(chr(i), end='')`);
         await this.exitRawRepl();
         // extract base64 from mixer output
         const idxOk = out.indexOf('OK');
@@ -198,7 +191,8 @@ class MicroPythonWrapper {
         // Returns the file as raw bytes (Uint8Array) by reusing download helper
         await this.runHelper();
         await this.enterRawRepl();
-        const out = await this.executeRaw(`with open('${path}','rb') as f:\n  b = b2a_base64(f.read())\n  for i in b:\n    print(chr(i), end='')`);
+        const safePath = path.replace(/'/g, "\\'");
+        const out = await this.executeRaw(`with open('${safePath}','rb') as f:\n  b = b2a_base64(f.read())\n  for i in b:\n    print(chr(i), end='')`);
         await this.exitRawRepl();
         const idxOk = out.indexOf('OK');
         const idxEnd = out.indexOf('\x04');
@@ -624,7 +618,9 @@ if (uploadFirmwareButton) {
                     firmwareFiles.push({ path: '/config.json', content: new TextEncoder().encode(configStr) });
                 }
             }
-            for (const folder of folders) {
+            // Create folders in order of increasing depth to ensure parents are created first
+            const folderList = [...folders].sort((a, b) => a.split('/').filter(Boolean).length - b.split('/').filter(Boolean).length);
+            for (const folder of folderList) {
                 try { await mp.createFolder(folder); } catch (e) { /* ignore exists errors */ }
             }
             // ensure we end by uploading VERSION at the very end
@@ -643,19 +639,19 @@ if (uploadFirmwareButton) {
                 console.log('Uploading', f.path);
                 appendOrUpdateLog(f.path, `Uploading ${f.path} ...`);
                 try {
-                    // Try file upload with retries
-                    const fileRetries = 2;
+                    // Try file upload with a small number of retries; use fast upload by default
+                    const fileRetries = 1;
                     let fileLastErr: any = null;
                     const FILE_UPLOAD_TIMEOUT_MS = 120000;
                     for (let attempt = 0; attempt <= fileRetries; attempt++) {
                         try {
                             const fileUploadPromise = mp.uploadFile(f.path, f.content, (uploaded, total) => {
-                        const percent = Math.round((uploaded / total) * 100);
-                        appendOrUpdateLog(f.path, `Uploading ${f.path}: ${percent}%`);
-                        const overallUploaded = uploadedBytesTotal + uploaded;
-                        const overallPercent = Math.round((overallUploaded / totalBytes) * 100);
-                        appendOrUpdateLog('overall', `Overall: ${overallPercent}% (${overallUploaded}/${totalBytes} bytes)`);
-                        if (progressBar) progressBar.value = overallPercent;
+                                const percent = Math.round((uploaded / total) * 100);
+                                appendOrUpdateLog(f.path, `Uploading ${f.path}: ${percent}%`);
+                                const overallUploaded = uploadedBytesTotal + uploaded;
+                                const overallPercent = Math.round((overallUploaded / totalBytes) * 100);
+                                appendOrUpdateLog('overall', `Overall: ${overallPercent}% (${overallUploaded}/${totalBytes} bytes)`);
+                                if (progressBar) progressBar.value = overallPercent;
                             });
                             await Promise.race([fileUploadPromise, new Promise((_, rej) => setTimeout(() => rej(new Error('File upload timeout')), FILE_UPLOAD_TIMEOUT_MS))]);
                             fileLastErr = null;
@@ -674,37 +670,39 @@ if (uploadFirmwareButton) {
                     }
                     uploadedBytesTotal += f.content.byteLength;
                     appendOrUpdateLog(f.path, `Uploaded ${f.path}`);
-                    // Verify by reading back the file and comparing bytes
+                    // Verify by reading back the file and comparing bytes only for critical files like VERSION
                     try {
-                        let verified = false;
-                        const verifyRetries = 1;
-                        for (let v = 0; v <= verifyRetries; v++) {
-                            try {
-                                const remote = await Promise.race([
-                                    mp.downloadFileToBytes(f.path),
-                                    new Promise((_, rej) => setTimeout(() => rej(new Error('Download verification timeout')), 60000))
-                                ]) as Uint8Array;
-                                if (arraysEqual(remote, f.content)) {
-                                    verified = true;
-                                    appendOrUpdateLog(f.path, `Verified ${f.path}`);
-                                    break;
-                                } else {
-                                    appendOrUpdateLog(f.path, `Verification failed for ${f.path}: mismatch`);
+                        if (f.path === '/VERSION') {
+                            let verified = false;
+                            const verifyRetries = 1;
+                            for (let v = 0; v <= verifyRetries; v++) {
+                                try {
+                                    const remote = await Promise.race([
+                                        mp.downloadFileToBytes(f.path),
+                                        new Promise((_, rej) => setTimeout(() => rej(new Error('Download verification timeout')), 60000))
+                                    ]) as Uint8Array;
+                                    if (arraysEqual(remote, f.content)) {
+                                        verified = true;
+                                        appendOrUpdateLog(f.path, `Verified ${f.path}`);
+                                        break;
+                                    } else {
+                                        appendOrUpdateLog(f.path, `Verification failed for ${f.path}: mismatch`);
                                         if (v < verifyRetries) {
-                                        appendOrUpdateLog(f.path, `Re-uploading ${f.path} for verification...`);
-                                        const reUploadPromise = mp.uploadFile(f.path, f.content, (uploaded, total) => {
-                                            const p = Math.round((uploaded / total) * 100);
-                                            appendOrUpdateLog(f.path, `Re-upload: ${f.path}: ${p}%`);
-                                        });
-                                        await Promise.race([reUploadPromise, new Promise((_, rej) => setTimeout(() => rej(new Error('File re-upload timeout')), 90000))]);
+                                            appendOrUpdateLog(f.path, `Re-uploading ${f.path} for verification...`);
+                                            const reUploadPromise = mp.uploadFile(f.path, f.content, (uploaded, total) => {
+                                                const p = Math.round((uploaded / total) * 100);
+                                                appendOrUpdateLog(f.path, `Re-upload: ${f.path}: ${p}%`);
+                                            });
+                                            await Promise.race([reUploadPromise, new Promise((_, rej) => setTimeout(() => rej(new Error('File re-upload timeout')), 90000))]);
+                                        }
                                     }
+                                } catch (vErr) {
+                                    appendOrUpdateLog(f.path, `Verification attempt failed: ${vErr}`);
+                                    if (v < verifyRetries) await new Promise(r => setTimeout(r, 200));
                                 }
-                            } catch (vErr) {
-                                appendOrUpdateLog(f.path, `Verification attempt failed: ${vErr}`);
-                                if (v < verifyRetries) await new Promise(r => setTimeout(r, 200));
                             }
+                            if (!verified) throw new Error('Verification failed');
                         }
-                        if (!verified) throw new Error('Verification failed');
                     } catch (verErr) {
                         appendOrUpdateLog(f.path, `Verification error: ${verErr}`);
                     }
@@ -744,12 +742,8 @@ if (wipeBadgeButton) {
             if (isUploading) { if (!confirm('An upload is in progress. Wipe may interfere. Continue?')) return; }
             isUploading = true;
             if (progressBar) progressBar.value = 10;
-            await mp.getPrompt();
-            await mp.enterRawRepl();
-            const code = `import os\nimport uos\nfor f in list(uos.ilistdir('/')):\n  try:\n    uos.remove('/' + f[0])\n  except OSError:\n    pass\n`;
-            await mp.executeRaw(code);
-            await mp.exitRawRepl();
-            alert('Badge wipe attempted');
+            await mp.removeFolder('/');
+            alert('Badge wiped successfully');
         } catch (err) {
             console.error('Wipe failed', err);
             alert('Wipe failed: ' + err);
@@ -772,27 +766,60 @@ if (updateBtn) {
 
             firmwareFiles = [];
 
-            // Preferred method: fetch files directly from the code/embedded folder
+            // Preferred method: fetch files directly from the code/embedded folder (recursive)
             const dirUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded?ref=main';
             let resp = await fetch(dirUrl);
             if (resp.ok) {
-                const listing = await resp.json();
-                if (!Array.isArray(listing)) throw new Error('Unexpected directory listing');
-                // Filter files and download each one via its download_url
-                for (const item of listing) {
-                    if (item.type !== 'file') continue;
-                    if (item.name === '__MACOSX' || item.name.endsWith('.DS_Store')) continue;
-                    // Use raw download_url to get binary content
-                    if (!item.download_url) continue;
-                    const fileResp = await fetch(item.download_url);
-                    if (!fileResp.ok) continue;
-                    const arrayBuf = await fileResp.arrayBuffer();
-                    const content = new Uint8Array(arrayBuf);
-                    firmwareFiles.push({ path: '/' + item.name, content });
+                // Recursively traverse directories to find files and keep folder structure
+                async function fetchGitHubDir(path: string) {
+                    const url = `https://api.github.com/repos/mpkendall/prototype-badge/contents/${encodeURIComponent(path)}?ref=main`;
+                    const r = await fetch(url);
+                    if (!r.ok) throw new Error('Failed to fetch ' + url + ': ' + r.statusText);
+                    const listing = await r.json();
+                    if (!Array.isArray(listing)) throw new Error('Unexpected directory listing for ' + path);
+                    for (const item of listing) {
+                        if (item.type === 'file') {
+                            if (!item.download_url) continue;
+                            // skip macOS system files and folder metadata
+                            if ((item.path && item.path.indexOf('__MACOSX') !== -1) || (item.name && item.name.endsWith('.DS_Store'))) continue;
+                            try {
+                                const fileResp = await fetch(item.download_url);
+                                if (!fileResp.ok) continue;
+                                const arrayBuf = await fileResp.arrayBuffer();
+                                const content = new Uint8Array(arrayBuf);
+                                // compute path relative to code/embedded and keep structure
+                                const rel = item.path.replace(/^code\/embedded\/?/, '');
+                                firmwareFiles.push({ path: '/' + rel, content });
+                            } catch (e) {
+                                console.warn('Failed to download file', item.download_url, e);
+                                continue;
+                            }
+                        } else if (item.type === 'dir') {
+                            // recurse into subdirectory
+                            await fetchGitHubDir(item.path);
+                        }
+                    }
+                }
+                try {
+                    await fetchGitHubDir('code/embedded');
+                } catch (err) {
+                    // If recursive fetch fails, fall back to the original behavior by trying to read the top level listing entries
+                    console.warn('Recursive fetch failed, falling back to listing:', err);
+                    const listing = await resp.json();
+                    if (!Array.isArray(listing)) throw new Error('Unexpected directory listing');
+                    for (const item of listing) {
+                        if (item.type !== 'file') continue;
+                        if (!item.download_url) continue;
+                        const fileResp = await fetch(item.download_url);
+                        if (!fileResp.ok) continue;
+                        const arrayBuf = await fileResp.arrayBuffer();
+                        const content = new Uint8Array(arrayBuf);
+                        firmwareFiles.push({ path: '/' + item.name, content });
+                    }
                 }
             } else {
                 // Fallback: look for a single firmware zip in the code folder
-                const zipUrl = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/code/embedded/firmware.zip?ref=${GH_BRANCH}`;
+                const zipUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded/firmware.zip?ref=main';
                 resp = await fetch(zipUrl);
                 if (resp.ok) {
                     const json = await resp.json();

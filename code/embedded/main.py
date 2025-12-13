@@ -13,9 +13,9 @@ try:
     with open("config.json", "r") as f:
         import json
         config = json.load(f)
-        badge_data["name"] = config.get("name")
-        badge_data["pronouns"] = config.get("pronouns")
-        badge_data["slack_handle"] = config.get("slack_handle")
+        badge_data["name"] = config.get("userName")
+        badge_data["pronouns"] = config.get("userPronouns")
+        badge_data["slack_handle"] = config.get("userHandle")
         configured=True
 except Exception as e:
     print("No config file found or error reading it:", e)
