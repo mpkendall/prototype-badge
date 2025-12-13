@@ -750,11 +750,41 @@ if (updateBtn) {
 
             firmwareFiles = [];
 
-            // Preferred method: fetch files directly from the code/embedded folder (recursive)
-            const dirUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded?ref=main';
-            let resp = await fetch(dirUrl);
-            if (resp.ok) {
-                // Recursively traverse directories to find files and keep folder structure
+            // Preferred method: try to fetch a single firmware.zip first (simpler and preserves structure),
+            // then fall back to recursively traversing the repo contents if the zip isn't present.
+            const zipUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/firmware.zip?ref=main';
+            let triedZip = false;
+            try {
+                const zResp = await fetch(zipUrl);
+                if (zResp.ok) {
+                    triedZip = true;
+                    const json = await zResp.json();
+                    if (json && json.content) {
+                        const b64 = json.content as string;
+                        const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                        const blob = new Blob([binary]);
+                        // @ts-ignore
+                        const JSZip = (await import('jszip')).default;
+                        const jszip = new JSZip();
+                        const zip = await jszip.loadAsync(blob);
+                        const zipFiles = zip.files as any;
+                        for (const path in zipFiles) {
+                            const entry = zipFiles[path] as any;
+                            if (entry.dir) continue;
+                            if (path.startsWith('__MACOSX') || path.endsWith('.DS_Store')) continue;
+                            const content = await entry.async('uint8array');
+                            const p = '/' + path;
+                            firmwareFiles.push({ path: p, content, folder: getFolder(p) });
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Attempt to fetch firmware.zip failed:', e);
+            }
+
+            if (!triedZip || firmwareFiles.length === 0) {
+                // Recursive traversal fallback
+                const dirUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded?ref=main';
                 async function fetchGitHubDir(path: string) {
                     const url = `https://api.github.com/repos/mpkendall/prototype-badge/contents/${encodeURIComponent(path)}?ref=main`;
                     const r = await fetch(url);
@@ -764,14 +794,12 @@ if (updateBtn) {
                     for (const item of listing) {
                         if (item.type === 'file') {
                             if (!item.download_url) continue;
-                            // skip macOS system files and folder metadata
                             if ((item.path && item.path.indexOf('__MACOSX') !== -1) || (item.name && item.name.endsWith('.DS_Store'))) continue;
                             try {
                                 const fileResp = await fetch(item.download_url);
                                 if (!fileResp.ok) continue;
                                 const arrayBuf = await fileResp.arrayBuffer();
                                 const content = new Uint8Array(arrayBuf);
-                                // compute path relative to code/embedded and keep structure
                                 const rel = item.path.replace(/^code\/embedded\/?/, '');
                                 const p = '/' + rel;
                                 firmwareFiles.push({ path: p, content, folder: getFolder(p) });
@@ -780,55 +808,35 @@ if (updateBtn) {
                                 continue;
                             }
                         } else if (item.type === 'dir') {
-                            // recurse into subdirectory
                             await fetchGitHubDir(item.path);
                         }
                     }
                 }
+
                 try {
                     await fetchGitHubDir('code/embedded');
                 } catch (err) {
-                    // If recursive fetch fails, fall back to the original behavior by trying to read the top level listing entries
-                    console.warn('Recursive fetch failed, falling back to listing:', err);
-                    const listing = await resp.json();
-                    if (!Array.isArray(listing)) throw new Error('Unexpected directory listing');
-                        for (const item of listing) {
-                        if (item.type !== 'file') continue;
-                        if (!item.download_url) continue;
-                        const fileResp = await fetch(item.download_url);
-                        if (!fileResp.ok) continue;
-                        const arrayBuf = await fileResp.arrayBuffer();
-                        const content = new Uint8Array(arrayBuf);
-                        const p = '/' + item.name;
-                        firmwareFiles.push({ path: p, content, folder: getFolder(p) });
+                    console.warn('Recursive fetch failed, attempting top-level listing fallback:', err);
+                    const resp = await fetch(dirUrl);
+                    if (resp.ok) {
+                        const listing = await resp.json();
+                        if (Array.isArray(listing)) {
+                            for (const item of listing) {
+                                if (item.type !== 'file') continue;
+                                if (!item.download_url) continue;
+                                try {
+                                    const fileResp = await fetch(item.download_url);
+                                    if (!fileResp.ok) continue;
+                                    const arrayBuf = await fileResp.arrayBuffer();
+                                    const content = new Uint8Array(arrayBuf);
+                                    const p = '/' + item.name;
+                                    firmwareFiles.push({ path: p, content, folder: getFolder(p) });
+                                } catch (e) {
+                                    console.warn('Failed to download', item.download_url, e);
+                                }
+                            }
+                        }
                     }
-                }
-            } else {
-                // Fallback: look for a single firmware zip in the code folder
-                const zipUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded/firmware.zip?ref=main';
-                resp = await fetch(zipUrl);
-                if (resp.ok) {
-                    const json = await resp.json();
-                    if (!json.content) throw new Error('No content available in firmware.zip');
-                    const b64 = json.content;
-                    const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                    const blob = new Blob([binary]);
-                    // parse zip content
-                    // @ts-ignore
-                    const JSZip = (await import('jszip')).default;
-                    const jszip = new JSZip();
-                    const zip = await jszip.loadAsync(blob);
-                    const zipFiles = zip.files as any;
-                    for (const path in zipFiles) {
-                        const entry = zipFiles[path] as any;
-                        if (entry.dir) continue;
-                        if (path.startsWith('__MACOSX') || path.endsWith('.DS_Store')) continue;
-                        const content = await entry.async('uint8array');
-                        const p = '/' + path;
-                        firmwareFiles.push({ path: p, content, folder: getFolder(p) });
-                    }
-                } else {
-                    throw new Error('Firmware fetch failed: ' + resp.statusText);
                 }
             }
             // ensure uniqueness by path

@@ -1,32 +1,34 @@
-name: Zip Firmware
+﻿name: Zip Firmware
 
 on:
-	workflow_dispatch:
-	push:
-		branches: [ main ]
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
-	zip:
-		runs-on: ubuntu-latest
-		name: Create firmware.zip from code/embedded
-		steps:
-			- name: Checkout repository
-				uses: actions/checkout@v4
+  zip:
+    runs-on: ubuntu-latest
+    name: Create firmware.zip from code/embedded
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-			- name: Ensure zip is available
-				run: |
-					sudo apt-get update -y
-					sudo apt-get install -y zip
+      - name: Ensure zip is available
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y zip
 
-			- name: Create firmware.zip
-				run: |
-					set -e
-					# Remove existing archive if present
-					rm -f "$GITHUB_WORKSPACE/code/firmware.zip"
-					# Create firmware.zip containing the contents of code/embedded
-					cd "$GITHUB_WORKSPACE/code/embedded"
-					zip -r "$GITHUB_WORKSPACE/code/firmware.zip" .
+      - name: Create firmware.zip
+        run: |
+          set -e
+          # Remove existing archive if present
+          rm -f "$GITHUB_WORKSPACE/code/firmware.zip"
+          # Create firmware.zip containing the contents of code/embedded
+          cd "$GITHUB_WORKSPACE/code/embedded"
+          zip -r "$GITHUB_WORKSPACE/code/firmware.zip" .
 
-			- name: List created file
-				run: ls -lh "$GITHUB_WORKSPACE/code/firmware.zip" || true
+      - name: List created file
+        run: ls -lh "$GITHUB_WORKSPACE/code/firmware.zip" || true
+
+
 
