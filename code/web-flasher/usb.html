@@ -74,18 +74,20 @@
         <div id="help-overlay" class="absolute inset-0 bg-black/50 cursor-pointer"></div>
         <div role="dialog" aria-modal="true" aria-labelledby="help-title" class="relative bg-stone-800 rounded-lg p-6 max-w-2xl w-11/12 text-white shadow-2xl max-h-[90vh] overflow-y-auto mx-auto">
             <div class="flex justify-between items-start">
-                <h3 id="help-title" class="text-lg font-bold">Badge Flasher — Help</h3>
+                <h3 id="help-title" class="text-lg font-bold">webserial flasher - help</h3>
                 <button id="help-close" type="button" class="text-stone-300 hover:text-white cursor-pointer">✕</button>
             </div>
             <div class="mt-4 space-y-3 text-sm">
-                <p><strong>Connect</strong> — Opens a Web Serial connection to the RP2040 running MicroPython. Once connected the button toggles to "Disconnect." If the device is unplugged the UI will update automatically.</p>
-                <p><strong>Check for Updates</strong> — Downloads the latest firmware ZIP from the GitHub repo and stages it locally. It does not automatically write to the badge; you'll need to press "Upload Firmware" to install.</p>
-                <p><strong>Choose / Load Firmware</strong> — "Choose firmware" opens a file picker; "Load Firmware" parses a local firmware ZIP (.zip) or single file (.uf2/.bin) into the web app's staging area. Loading does NOT modify the badge; it simply prepares the package for upload.</p>
-                <p><strong>Upload Firmware</strong> — Sends files from the loaded firmware package to the badge via Web Serial. It creates folders if required and uploads files; the <code>/VERSION</code> file (if present) is uploaded last, to ensure devices apply updates correctly. Upload does NOT perform a wipe or factory reset — it will overwrite files with the same path but does not delete unrelated files.</p>
-                <p><strong>Save Configuration</strong> — Writes the values in the "Name", "Slack handle" and "Pronouns" fields to <code>/config.json</code> on the badge. This operation does not disconnect the badge. The uploaded configuration will be used by the badge software where appropriate.</p>
-                <p><strong>Load Configuration</strong> — Downloads <code>/config.json</code> from the badge (if it exists) and populates the form fields. It doesn't change other files.</p>
-                <p><strong>Wipe Badge</strong> — Attempts to delete files from the device file system. This is a destructive operation; use with caution. It does NOT re-flash the bootloader or change the device's MicroPython firmware mode.</p>
-                <p><strong>Limits / Notes</strong> — UF2-style flashing (device appears as a mass-storage device) cannot be performed via Web Serial. Upload via Web Serial writes files while the MicroPython firmware is running. If you need to re-flash the UF2, use the device USB boot mode and copy the UF2 file using the OS file manager.</p>
+                <p>flash your prototype badge here!</p>
+                <p>you'll need a webserial-compatible browser (chrome, edge). firefox (and zen) can work with the webserial extension.</p>
+                <p>firstly, plug in your badge with a usb cable and hit "Connect". select your board from the device picker.</p>
+                <p>next, either choose a firmware file (.uf2 or .zip) from your computer, or hit "Check for Updates" to fetch the latest firmware from the github repo. if you chose a local file, be sure to hit "Load Firmware" before uploading.</p>
+                <p>once a firmware is loaded, hit "Upload Firmware" to flash it to your badge! this can take anywhere between 5 and 20 seconds. watch the log to see when it's done!</p>
+                <p>your badge comes preprogrammed with the code on github. once you upload new firmware, the old one will be replaced.</p>
+                <p>you can also configure your badge's name, slack handle, and pronouns here! just fill out the fields and hit "Save Configuration" to write them to your badge. they will be displayed on the badge's screen AFTER A RESET.</p>
+                <p>if you want to reset your badge to factory settings, use the "Wipe Badge" button.</p>
+                <p>i also recommend wiping your badge before uploading new firmware to avoid any potential conflicts or issues.</p>
+                <p>much of the core features are based off of <a href="https://github.com/mpkendall/shipwrecked-pcb/tree/main/webflasher" class="underline" target="_blank">@rivques' shipwrecked webflasher</a>!</p>
             </div>
         </div>
     </div>

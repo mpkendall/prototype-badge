@@ -7,6 +7,27 @@ let isUploading = false;
 // Track overall bytes for progress across upload flow
 let totalBytes = 0;
 
+function parseSemVer(s: string) {
+    if (!s) return null;
+    const m = s.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+    if (!m) return null;
+    return { major: parseInt(m[1], 10), minor: parseInt(m[2], 10), patch: parseInt(m[3], 10) };
+}
+
+function compareSemVer(a: string | null, b: string | null) {
+    // If both missing, treat equal. If one missing, missing is considered older.
+    if (!a && !b) return 0;
+    if (!a && b) return -1;
+    if (a && !b) return 1;
+    const pa = parseSemVer(a!);
+    const pb = parseSemVer(b!);
+    if (!pa || !pb) return 0;
+    if (pa.major !== pb.major) return pa.major > pb.major ? 1 : -1;
+    if (pa.minor !== pb.minor) return pa.minor > pb.minor ? 1 : -1;
+    if (pa.patch !== pb.patch) return pa.patch > pb.patch ? 1 : -1;
+    return 0;
+}
+
 const btn = document.getElementById("connect-button") as HTMLButtonElement;
 const filters = [
     { usbVendorId: 0x2E8A, usbProductId: 0x0005 }
@@ -263,7 +284,8 @@ if (saveConfigButton) {
                 appendOrUpdateLog('config', `Saving config: ${perc}% (${uploaded}/${total})`);
                 if (progressBar) progressBar.value = perc;
             });
-            alert('Configuration saved');
+            appendOrUpdateLog('config', 'Restarting badge...');
+            await mp.softReset();
         } catch (err) {
             console.error('Failed to save configuration', err);
             appendOrUpdateLog('config', `Save failed: ${err}`);
@@ -272,7 +294,7 @@ if (saveConfigButton) {
             if (saveConfigButton) saveConfigButton.disabled = false;
             isUploading = false;
             if (progressBar) progressBar.value = 0;
-            appendOrUpdateLog('config', `Config save completed`);
+            appendOrUpdateLog('config', `Configuration saved!`);
         }
     });
 }
@@ -379,6 +401,7 @@ if (uploadFirmwareButton) {
 
             // compute total bytes for overall progress
             totalBytes = firmwareFiles.reduce((s, ff) => s + ff.content.byteLength, 0);
+
 
 
             for (const file of firmwareFiles) {
@@ -574,9 +597,52 @@ if (updateBtn) {
                 const [versionFile] = firmwareFiles.splice(versionIndex, 1);
                 firmwareFiles.push(versionFile);
             }
-            appendOrUpdateLog('files', `files: ${firmwareFiles.map(f => f.path).join(', ')}`);
-            appendOrUpdateLog('folders', `folders: ${Array.from(new Set(firmwareFiles.map(f => f.folder))).join(', ')}`);
             appendLog('Latest firmware fetched and loaded (' + firmwareFiles.length + ' files)');
+
+            // VERSION check: compare device's /VERSION (if connected) to the latest available
+            try {
+                let latestVersion: string | null = null;
+                const versionFile = firmwareFiles.find(f => f.path === '/VERSION');
+                if (versionFile) {
+                    latestVersion = new TextDecoder().decode(versionFile.content).trim();
+                } else {
+                    try {
+                        const r = await fetch('https://raw.githubusercontent.com/mpkendall/prototype-badge/main/code/embedded/VERSION');
+                        if (r.ok) latestVersion = (await r.text()).trim();
+                    } catch (e) { /* ignore fetch error */ }
+                }
+
+                if (latestVersion) {
+                    if (mp && mp.isConnected) {
+                        let deviceVersion: string | null = null;
+                        try {
+                            const dv = await mp.downloadFileToString('/VERSION');
+                            deviceVersion = dv ? dv.trim() : null;
+                            console.log('Device firmware version:', deviceVersion);
+                        } catch (e) {
+                            deviceVersion = null;
+                        }
+                        const cmp = compareSemVer(deviceVersion, latestVersion);
+                        if (cmp === -1) {
+                            appendOrUpdateLog('version', `Device firmware version ${deviceVersion || '<none>'} is older than latest remote ${latestVersion}. Update available.`);
+                            if (!versionFile) {
+                                const enc = new TextEncoder();
+                                const content = enc.encode(latestVersion + '\n');
+                                firmwareFiles.push({ path: '/VERSION', content, folder: '/' });
+                                appendOrUpdateLog('version', 'Added VERSION from GitHub to update list.');
+                            }
+                        } else if (cmp === 0) {
+                            appendOrUpdateLog('version', `Device firmware version ${deviceVersion || '<none>'} matches latest remote ${latestVersion}. No update needed.`);
+                        } else if (cmp === 1) {
+                            appendOrUpdateLog('version', `Device firmware version ${deviceVersion || '<none>'} is newer than latest remote ${latestVersion}. Proceeding with update list unchanged.`);
+                        }
+                    } else {
+                        appendOrUpdateLog('version', `Latest firmware version available: ${latestVersion}. Connect device to compare versions.`);
+                    }
+                }
+            } catch (e) {
+                console.warn('Version check failed', e);
+            }
         } catch (err) {
             console.error('Update failed', err);
             alert('Update failed: ' + err);

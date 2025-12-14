@@ -1,9 +1,4 @@
-"""
-MicroPython library for Waveshare 1.54" E-Paper Display V2
-Based on the original C++ driver from Waveshare
-Converted to MicroPython format for easier use with MicroPython boards
-Handles low-level comms with the display
-"""
+# @rivques - https://github.com/mpkendall/shipwrecked-pcb/blob/main/Code/internal_os/hardware/einkdriver.py
 
 import framebuf
 import utime
@@ -259,8 +254,9 @@ class EPD:
         Args:
             buffer: Buffer to display (uses internal buffer if None)
         """
-        self.reset()
-        self.init_full_mode()
+        #self.reset()
+        #self.init_full_mode()
+        self.init()
         
         if buffer is None:
             buffer = self.buffer
@@ -588,113 +584,7 @@ class EPD:
     def text(self, text, x, y, color=0):
         """Draw text"""
         self.framebuf.text(text, x, y, color)
-
-    def text_scaled(self, text, x, y, scale=1, color=0):
-        """Draw scaled text using the built-in font as a bitmap and expanding pixels.
-
-        This creates a temporary small framebuffer for each input line (8px tall) and scales
-        each pixel up by `scale` into the main framebuffer. Works with multiple lines (`\n`).
-        """
-        if scale <= 1:
-            # simple pass-through
-            self.text(text, x, y, color)
-            return
-
-        lines = text.split('\n')
-        for li, line in enumerate(lines):
-            if len(line) == 0:
-                continue
-            # size of single-line small buffer
-            small_w = len(line) * 8
-            small_h = 8
-            byte_w = (small_w + 7) // 8
-            small_buf = bytearray(byte_w * small_h)
-            small_fb = framebuf.FrameBuffer(small_buf, small_w, small_h, framebuf.MONO_HLSB)
-            small_fb.fill(1)
-            small_fb.text(line, 0, 0, 0)
-
-            # For each pixel, copy scaled
-            for sy in range(small_h):
-                for sx in range(small_w):
-                    if small_fb.pixel(sx, sy) == 0:
-                        # compute destination
-                        dst_x = x + sx * scale
-                        dst_y = y + (li * small_h + sy) * scale
-                        # fill the scaled pixel block
-                        self.fill_rect(dst_x, dst_y, scale, scale, color)
-
-    def nice_text(self, text, x=0, y=0, color=0, max_scale=None, center=False, center_vertical=False):
-        """Draw text using the largest integer scale of the default font that fits the display.
-
-        - Attempts to find the biggest `scale` such that the text (with smart word wrapping)
-          fits into the display's width and height.
-        - If `center` is True the text will be horizontally centered.
-        - If text contains `\n`, those are honored as existing line breaks.
-
-        Returns the scale used and the final list of lines drawn.
-        """
-        # Compute maximum reasonable scale
-        max_scale_possible = min(self.width // 8, self.height // 8)
-        if max_scale_possible <= 0:
-            max_scale_possible = 1
-        if max_scale is not None and max_scale < max_scale_possible:
-            max_scale_possible = max_scale
-
-        # Clean newlines and preserve existing
-        input_lines = [l.strip() for l in text.split('\n')]
-
-        def wrap_for_scale(scale):
-            max_chars = self.width // (8 * scale)
-            max_lines = self.height // (8 * scale)
-            if max_chars <= 0 or max_lines <= 0:
-                return None
-
-            final_lines = []
-            for in_l in input_lines:
-                if in_l == "":
-                    final_lines.append("")
-                    continue
-                words = in_l.split()
-                cur = ""
-                for w in words:
-                    if len(w) > max_chars:
-                        # This scale can't fit the single word
-                        return None
-                    if cur == "":
-                        cur = w
-                    elif len(cur) + 1 + len(w) <= max_chars:
-                        cur = cur + " " + w
-                    else:
-                        final_lines.append(cur)
-                        cur = w
-                if cur != "":
-                    final_lines.append(cur)
-            if len(final_lines) <= max_lines:
-                return final_lines
-            return None
-
-        chosen_scale = 1
-        chosen_lines = [text]
-        for scale in range(max_scale_possible, 0, -1):
-            wrapped = wrap_for_scale(scale)
-            if wrapped is not None:
-                chosen_scale = scale
-                chosen_lines = wrapped
-                break
-
-        # Now draw lines using scaled text
-        total_height = len(chosen_lines) * 8 * chosen_scale
-        if center_vertical:
-            # Recompute starting y centered vertically inside display
-            y = (self.height - total_height) // 2
-        for li, line in enumerate(chosen_lines):
-            # compute x offset
-            if center:
-                text_width = len(line) * 8 * chosen_scale
-                xoff = x + (self.width - text_width) // 2
-            else:
-                xoff = x
-            yoff = y + li * 8 * chosen_scale
-            self.text_scaled(line, xoff, yoff, scale=chosen_scale, color=color)
-
-        return chosen_scale, chosen_lines
+    
+    def blit(self, src, x, y):
+        """Blit a source buffer onto the display at (x, y)"""
+        self.framebuf.blit(src, x, y)

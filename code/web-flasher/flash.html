@@ -6,17 +6,73 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="/src/style.css" rel="stylesheet">
+    <script src="/src/flash.ts" type="module"></script>
     <title>Photodiode Flasher</title>
 </head>
 
-<body class="bg-indigo-950">
+<body class="bg-gray-700 flex flex-col min-h-screen">
     <div class="flex flex-row items-center">
         <button onclick="window.location.href='/'"
-            class="m-4 px-4 py-2 pt-1 rounded-lg bg-gray-700 text-white hover:bg-gray-600 transition cursor-pointer shadow-2xl/35">←</button>
+            class="m-4 px-4 py-2 pt-1 rounded-lg bg-gray-800 text-white hover:bg-gray-600 transition cursor-pointer shadow-2xl/35">←</button>
         <h1 class="flex-1 text-center text-white text-2xl font-semibold">Photodiode Flasher</h1>
     </div>
 
-    
+    <div class="p-4 flex-1 text-white grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-stone-800 rounded-2xl p-6 flex flex-col items-center justify-center text-center gap-4">
+            <div class="bg-stone-800 aspect-square w-2/3 max-w-xs rounded-md shadow-md sm:w-48 md:w-40 lg:w-56 border-2 border-stone-600" id="flasher"></div>
+            <div class="text-stone-300 text-sm">place photodiode here ^</div>
+            <button id="start-read" type="button" class="mt-3 px-4 py-2 rounded-lg bg-green-700 text-white hover:bg-green-600 transition cursor-pointer shadow-2xl/35">Start</button>
+        </div>
+        <div class="bg-stone-800 rounded-2xl p-4">
+            <h2 class="font-bold">badge configuration</h2>
+            <div class="mt-4 space-y-3">
+                <div>
+                    <label class="text-sm block">Name</label>
+                    <input id="userName" name="userName" type="text" class="p-2 rounded bg-stone-900 text-white w-full" />
+                </div>
+                <div>
+                    <label class="text-sm block">Slack handle</label>
+                    <input id="userHandle" name="userHandle" type="text" class="p-2 rounded bg-stone-900 text-white w-full" />
+                </div>
+                <div>
+                    <label class="text-sm block">Pronouns</label>
+                    <input id="userPronouns" name="userPronouns" type="text" class="p-2 rounded bg-stone-900 text-white w-full" />
+                </div>
+                <details class="mt-4">
+                    <summary class="block w-full px-3 py-2 rounded bg-stone-900 cursor-pointer text-sm text-white">advanced options</summary>
+                    <div class="mt-3 grid grid-cols-2 gap-3">
+                        <label class="text-sm">Bit hold (ms)</label>
+                        <input id="bitHold" name="bitHold" type="number" min="10" value="120" class="p-2 rounded bg-stone-900 text-white w-full" />
+                        <label class="text-sm">Bit gap (ms)</label>
+                        <input id="bitGap" name="bitGap" type="number" min="0" value="50" class="p-2 rounded bg-stone-900 text-white w-full" />
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    <button id="help-button" type="button" aria-haspopup="dialog" aria-expanded="false" class="fixed bottom-6 right-6 z-50 bg-indigo-700 hover:bg-indigo-600 text-white rounded-full p-3 shadow-lg cursor-pointer">?
+    </button>
+
+    <div id="help-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-150">
+        <div id="help-overlay" class="absolute inset-0 bg-black/50 cursor-pointer"></div>
+        <div role="dialog" aria-modal="true" aria-labelledby="help-title" class="relative bg-stone-800 rounded-lg p-6 max-w-2xl w-11/12 text-white shadow-2xl max-h-[90vh] overflow-y-auto mx-auto">
+            <div class="flex justify-between items-start">
+                <h3 id="help-title" class="text-lg font-bold">photodiode flasher - help</h3>
+                <button id="help-close" type="button" class="text-stone-300 hover:text-white cursor-pointer">✕</button>
+            </div>
+            <div class="mt-4 space-y-3 text-sm">
+                <p>configure your prototype badge here!</p>
+                <p>first, make sure your badge is powered on and displaying the photodiode flasher screen. you'll need to power it over usb.</p>
+                <p>enter your configuration details in the fields provided!</p>
+                <p>next, position your badge so the photodiode area is aligned with the outlined box on this page.</p>
+                <p>hit "Start" to begin the flashing process. the photodiode will read the configuration data and write it to your badge. this can take anywhere from a few seconds to a minute depending on the data size.</p>
+                <p>once the process is complete, your badge will be configured with the new settings. reset your badge to apply the changes.</p>
+                <p>inspired by <a href="https://opensauce.com/badge-25/" target="_blank" class="underline">open sauce 2025 badges</a>!</p>
+            </div>
+        </div>
+    </div>
+
 </body>
 
 </html>
