@@ -284,7 +284,7 @@ if (saveConfigButton) {
                 appendOrUpdateLog('config', `Saving config: ${perc}% (${uploaded}/${total})`);
                 if (progressBar) progressBar.value = perc;
             });
-            appendOrUpdateLog('config', 'Restarting badge...');
+            appendLog('Restarting badge...');
             await mp.softReset();
         } catch (err) {
             console.error('Failed to save configuration', err);
@@ -294,7 +294,7 @@ if (saveConfigButton) {
             if (saveConfigButton) saveConfigButton.disabled = false;
             isUploading = false;
             if (progressBar) progressBar.value = 0;
-            appendOrUpdateLog('config', `Configuration saved!`);
+            appendLog(`Configuration saved!`);
         }
     });
 }
@@ -313,7 +313,7 @@ if (loadConfigButton) {
             (document.getElementById('userName') as HTMLInputElement).value = parsed.userName || '';
             (document.getElementById('userHandle') as HTMLInputElement).value = parsed.userHandle || '';
             (document.getElementById('userPronouns') as HTMLInputElement).value = parsed.userPronouns || '';
-            alert('Configuration loaded');
+            appendOrUpdateLog('config', 'Configuration loaded.');
         } catch (err) {
             console.error('Failed to load configuration', err);
             alert('Failed to load configuration: ' + (err as any).message || err);
@@ -439,6 +439,8 @@ if (uploadFirmwareButton) {
                 appendLog('Firmware uploaded successfully.');
                 if (progressBar) progressBar.value = 100;
                 appendOrUpdateLog('overall', `Overall: 100% (${totalBytes}/${totalBytes} bytes)`);
+                await mp.softReset();
+                appendLog('Badge restarted to apply new firmware.');
             } catch (err) {
                 console.error('Upload failed', err);
                 appendLog('Upload failed: ' + err);
