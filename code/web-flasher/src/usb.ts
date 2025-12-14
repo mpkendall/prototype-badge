@@ -1,297 +1,4 @@
-// Minimal MicroPython wrapper using Web Serial to upload files and run raw repl commands.
-type SerialPort = any;
-class MicroPythonWrapper {
-    port: any;
-    reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-    writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
-    readingBuffer: string = '';
-    readingUntil: string | null = null;
-    resolveReadingUntilPromise: any = null;
-    rejectReadingUntilPromise: any = null;
-    isConnected = false;
-    onDisconnect: (() => void) | null = null;
-
-    constructor(port: any) {
-        this.port = port;
-    }
-
-    async init() {
-        this.reader = (this.port.readable as ReadableStream).getReader();
-        this.writer = (this.port.writable as WritableStream).getWriter();
-        this.isConnected = true;
-        if (typeof (navigator as any).serial !== 'undefined') {
-            try {
-                (navigator as any).serial.addEventListener('disconnect', (ev: any) => {
-                    if (ev && ev.port && ev.port === this.port) {
-                        this.isConnected = false;
-                        if (this.onDisconnect) this.onDisconnect();
-                    }
-                });
-            } catch (e) { /* ignore if not supported */ }
-        }
-        this.readForeverAndReport();
-    }
-
-    async readForeverAndReport() {
-        try {
-            if (wipeBadgeButton) wipeBadgeButton.disabled = true;
-            if (saveConfigButton) saveConfigButton.disabled = true;
-            if (uploadFirmwareButton) uploadFirmwareButton.disabled = true;
-            while (true) {
-                const { value, done } = await this.reader!.read();
-                if (done) {
-                    this.reader!.releaseLock();
-                    this.isConnected = false;
-                    if (this.onDisconnect) this.onDisconnect();
-                    break;
-                }
-                if (value) {
-                    // decode as text and process
-                    const s = (new TextDecoder()).decode(value as Uint8Array);
-                    this.onData(s);
-                }
-            }
-        } catch (err) {
-            console.warn('Read loop ended:', err);
-        }
-    }
-
-    onData(buffer: string) {
-        if (this.readingUntil != null) {
-            this.readingBuffer += buffer;
-            if (this.readingBuffer.indexOf(this.readingUntil) != -1) {
-                const response = this.readingBuffer;
-                this.readingUntil = null;
-                this.readingBuffer = '';
-                if (this.resolveReadingUntilPromise) this.resolveReadingUntilPromise(response);
-            }
-        }
-    }
-
-    async write(str: string) {
-        const textEncoder = new TextEncoder();
-        console.log('mpy write:', sanitizeForLog(str));
-        const uint8Array = textEncoder.encode(str);
-        await this.writer!.write(uint8Array);
-    }
-
-    readUntil(token: string): Promise<string> {
-        if (this.readingUntil != null) {
-            return Promise.reject(new Error(`Already running "read until"`));
-        }
-        this.readingBuffer = '';
-        this.readingUntil = token;
-        return new Promise((resolve, reject) => {
-            this.resolveReadingUntilPromise = (result: string) => {
-                this.readingUntil = null;
-                this.readingBuffer = '';
-                this.resolveReadingUntilPromise = () => false;
-                this.rejectReadingUntilPromise = () => false;
-                resolve(result);
-            };
-            this.rejectReadingUntilPromise = (msg?: string) => {
-                this.readingUntil = null;
-                this.readingBuffer = '';
-                this.resolveReadingUntilPromise = () => false;
-                this.rejectReadingUntilPromise = () => false;
-                reject(new Error(msg || 'readUntil rejected'));
-            };
-            // Fallback timeout to avoid infinite waits
-            setTimeout(() => {
-                if (this.readingUntil != null) {
-                    const snapshot = this.readingBuffer.slice(0, 2048);
-                    this.readingUntil = null;
-                    this.readingBuffer = '';
-                    reject(new Error('Read timeout: buffer snapshot: ' + snapshot));
-                }
-            }, 20000);
-        });
-    }
-
-    async getPrompt() {
-        if (this.readingUntil) {
-            this.rejectReadingUntilPromise('Interrupt execution to get prompt');
-        }
-        this.write('\x03\x02');
-        await this.readUntil('>>>');
-    }
-
-    async enterRawRepl() {
-        this.write('\x01');
-        await this.readUntil('raw REPL; CTRL-B to exit');
-    }
-
-    async exitRawRepl() {
-        this.write('\x02');
-        await this.readUntil('>>>');
-    }
-
-    async executeRaw(code: string): Promise<string> {
-        const S = 128;
-        for (let i = 0; i < code.length; i += S) {
-            const c = code.slice(i, i + S);
-            await this.write(c);
-            await new Promise((r) => setTimeout(r, 10));
-        }
-        await this.write('\x04');
-        const result = await this.readUntil('\x04>');
-        return result;
-    }
-
-    async runHelper() {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        const HELPER_CODE = `import os\nimport json\nimport ubinascii\n\nos.chdir('/')\n\ndef is_directory(path):\n  return True if os.stat(path)[0] == 0x4000 else False\n\ndef get_all_files(path, array_of_files = []):\n  files = os.ilistdir(path)\n  for file in files:\n    is_folder = file[1] == 16384\n    p = path + '/' + file[0]\n    array_of_files.append({"path": p, "type": "folder" if is_folder else "file"})\n    if is_folder:\n        array_of_files = get_all_files(p, array_of_files)\n  return array_of_files\n\ndef ilist_all(path):\n  print(json.dumps(get_all_files(path)))\n\ndef delete_folder(path):\n  files = get_all_files(path)\n  for file in files:\n    if file['type'] == 'file':\n        os.remove(file['path'])\n  for file in reversed(files):\n    if file['type'] == 'folder':\n        os.rmdir(file['path'])\n  if path != '/':\n    try:\n      os.rmdir(path)\n    except OSError:\n      pass\n\ndef b2a_base64(data):\n  import ubinascii\n  return ubinascii.b2a_base64(data)\n`;
-        const out = await this.executeRaw(HELPER_CODE);
-        await this.exitRawRepl();
-        return out;
-    }
-
-    async listFiles() {
-        await this.runHelper();
-        await this.enterRawRepl();
-        const out = await this.executeRaw(`print(json.dumps(get_all_files("")))`);
-        await this.exitRawRepl();
-        // Attempt to extract JSON between OK and EOT
-        const idxOk = out.indexOf('OK');
-        const idxEnd = out.indexOf('\x04');
-        if (idxOk === -1 || idxEnd === -1) return [];
-        const result = out.slice(idxOk + 2, idxEnd);
-        try { return JSON.parse(result); } catch (e) { return []; }
-    }
-
-    async createFolder(path: string) {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        const safePath = path.replace(/'/g, "\\'");
-        const command = `import os;os.mkdir('${safePath}')`;
-        await this.executeRaw(command);
-        await this.exitRawRepl();
-    }
-
-    async removeFolder(path: string) {
-        await this.getPrompt();
-        await this.runHelper();
-        await this.enterRawRepl();
-        const safePath = path.replace(/'/g, "\\'");
-        await this.executeRaw(`delete_folder('${safePath}')`);
-        await this.exitRawRepl();
-    }
-
-    async createFile(path: string) {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        const safePath = path.replace(/'/g, "\\'");
-        const command = `f=open('${safePath}', 'w');f.close()`;
-        await this.executeRaw(command);
-        await this.exitRawRepl();
-    }
-
-    async saveFile(path: string, content: string) {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        await this.executeRaw(`f=open('${path}','wb')\\nw=f.write`);
-        const d = new TextEncoder().encode(content);
-        await this.executeRaw(`w(bytes([${Array.from(d)}]))`);
-        await this.executeRaw(`f.close()`);
-        await this.exitRawRepl();
-    }
-
-    async removeFile(path: string) {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        let command = `import uos\n`;
-        command += `try:\n`;
-        command += `  uos.remove("${path}")\n`;
-        command += `except OSError:\n`;
-        command += `  print(0)\n`;
-        await this.executeRaw(command);
-        await this.exitRawRepl();
-    }
-
-    async loadFile(path: string) {
-        await this.getPrompt();
-        await this.enterRawRepl();
-        const out = await this.executeRaw(
-            `with open('${path}','r') as f:\n while 1:\n  b=f.read(256)\n  if not b:break\n  print(b,end='')`
-        );
-        await this.exitRawRepl();
-        // Try to extract printed output between OK and EOT
-        const idxOk = out.indexOf('OK');
-        const idxEnd = out.indexOf('\x04');
-        if (idxOk === -1 || idxEnd === -1) return '';
-        return out.slice(idxOk + 2, idxEnd);
-    }
-
-    async downloadFile(source: string) {
-        await this.getPrompt();
-        await this.runHelper();
-        await this.enterRawRepl();
-        const output = await this.executeRaw(`with open('${source}','rb') as f:\n  b = b2a_base64(f.read())\n  for i in b:\n    print( chr(i), end='' )\n`);
-        await this.exitRawRepl();
-        // extract between OK and EOT
-        const idxOk = output.indexOf('OK');
-        const idxEnd = output.indexOf('\x04');
-        if (idxOk === -1 || idxEnd === -1) return '';
-        const base64 = output.slice(idxOk + 2, idxEnd);
-        return base64;
-    }
-
-    async downloadFileToString(source: string) {
-        const base64 = await this.downloadFile(source);
-        return atob(base64);
-    }
-
-    async uploadFile(path: string, content: any, reporter?: (uploaded: number, total: number) => void) {
-        const CHUNK_SIZE = 512;
-        reporter = reporter || (() => false);
-        await this.getPrompt();
-        await this.enterRawRepl();
-        try {
-            const safePath = path.replace(/'/g, "\\'");
-            await this.executeRaw(`f=open('${safePath}','wb')\\nw=f.write`);
-            for (let i = 0; i < content.byteLength; i += CHUNK_SIZE) {
-                const c = new Uint8Array(content.slice(i, i + CHUNK_SIZE));
-                await this.executeRaw(`w(bytes([${c}]))`);
-                if (reporter) reporter(Math.min(i + CHUNK_SIZE, content.byteLength), content.byteLength);
-            }
-            await this.executeRaw(`f.close()`);
-        } finally {
-            try { await this.exitRawRepl(); } catch (e) { /* ignore */ }
-        }
-    }
-
-    async uploadFileFromString(path: string, content: string, reporter?: (uploaded: number, total: number) => void) {
-        const bytes = new TextEncoder().encode(content);
-        return this.uploadFile(path, bytes, reporter);
-    }
-
-    async uploadFileFromBase64(path: string, base64: string, reporter?: (uploaded: number, total: number) => void) {
-        const content = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        return this.uploadFile(path, content, reporter);
-    }
-
-    async downloadFileToBytes(path: string) {
-        const base64 = await this.downloadFile(path);
-        const decoded = atob(base64);
-        return Uint8Array.from(decoded, c => c.charCodeAt(0));
-    }
-
-    async close() {
-        try {
-            if (this.reader) { await this.reader.cancel(); }
-        } catch (e) {}
-        try { if (this.writer) { await this.writer.releaseLock(); } } catch (e) {}
-        try { await this.port.close(); } catch (e) {}
-        this.isConnected = false;
-        if (this.onDisconnect) this.onDisconnect();
-    }
-}
-
-// (removed unused byte-array helper; shipwrecked implementation uses string-based read)
-
-// Initialize UI after elements are defined
-
+import { MicroPythonWrapper, type SerialPort, sanitizeForLog } from './micropython-webserial.ts'
 
 let port: SerialPort | null = null;
 let mp: MicroPythonWrapper | null = null;
@@ -322,14 +29,14 @@ if (btn) {
             }
             try {
                 if (mp) {
-                    try { await mp.close(); } catch (e) {}
+                    try { await mp.close(); } catch (e) { }
                 }
                 // close the underlying port
-                try { await port.close(); } catch (e) {}
+                try { await port.close(); } catch (e) { }
                 mp = null;
                 port = null;
                 setDisconnectedAppearance();
-                console.log("Disconnected.");
+                appendOrUpdateLog('connection','Disconnected.');
             } catch (err) {
                 console.error("Disconnect failed:", err);
             }
@@ -368,9 +75,9 @@ if (btn) {
             } catch (e) { }
 
             updateConnectButtonAppearance();
-            console.log("Connected:", port);
+            appendOrUpdateLog('connection', 'Connected');
         } catch (err) {
-            console.log("Connection failed or cancelled:", err);
+            console.warn("Connection failed or cancelled:", err);
         }
     });
 }
@@ -515,7 +222,7 @@ window.addEventListener('beforeunload', (e) => {
         return;
     }
     if (mp) {
-        try { mp.close(); } catch (e) {}
+        try { mp.close(); } catch (e) { }
     }
 });
 
@@ -538,13 +245,6 @@ function getFolder(path: string) {
     return path.slice(0, idx);
 }
 
-function arraysEqual(a: Uint8Array, b: Uint8Array) {
-    if (!a || !b) return false;
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-    return true;
-}
-
 if (saveConfigButton) {
     saveConfigButton.addEventListener('click', async (e: Event) => {
         e.preventDefault();
@@ -563,7 +263,6 @@ if (saveConfigButton) {
                 appendOrUpdateLog('config', `Saving config: ${perc}% (${uploaded}/${total})`);
                 if (progressBar) progressBar.value = perc;
             });
-            console.log('Configuration saved successfully');
             alert('Configuration saved');
         } catch (err) {
             console.error('Failed to save configuration', err);
@@ -614,7 +313,7 @@ if (loadFirmwareButton && firmwareInput) {
             const zip = await jszip.loadAsync(file);
             firmwareFiles = [];
             const zipFiles = zip.files as any;
-                for (const path in zipFiles) {
+            for (const path in zipFiles) {
                 const entry = zipFiles[path] as any;
                 if (entry.dir) { continue; }
                 const content = await entry.async('uint8array');
@@ -675,64 +374,102 @@ if (uploadFirmwareButton) {
             isUploading = true;
             clearLog();
             appendOrUpdateLog('overall', 'Starting firmware upload...');
-           
-            console.log('Firmware upload will include', firmwareFiles.length, 'unique files');
+
+            appendOrUpdateLog('overall', `Firmware upload will include ${firmwareFiles.length} unique files`);
 
             // compute total bytes for overall progress
             totalBytes = firmwareFiles.reduce((s, ff) => s + ff.content.byteLength, 0);
-            
-            
+
+
             for (const file of firmwareFiles) {
                 appendLog(`Uploading ${file.path} (${file.content.byteLength} bytes)...`);
             }
 
             appendLog('Firmware uploaded (attempted).');
-        try {
-            isUploading = true;
-            clearLog();
-            appendOrUpdateLog('overall', 'Starting firmware upload...');
+            try {
+                isUploading = true;
+                clearLog();
+                appendOrUpdateLog('overall', 'Starting firmware upload...');
 
-            console.log('Firmware upload will include', firmwareFiles.length, 'unique files');
+                appendOrUpdateLog('overall', `Firmware upload will include ${firmwareFiles.length} unique files`);
 
-            // compute total bytes for overall progress
-            totalBytes = firmwareFiles.reduce((s, ff) => s + ff.content.byteLength, 0);
+                // compute total bytes for overall progress
+                totalBytes = firmwareFiles.reduce((s, ff) => s + ff.content.byteLength, 0);
 
-            // Create folders first (unique, excluding root)
-            const folderSet = new Set<string>(firmwareFiles.map(f => f.folder || '/'));
-            const folders = Array.from(folderSet).filter(f => f && f !== '/');
-            // sort by depth so parents are created before children
-            folders.sort((a, b) => a.split('/').length - b.split('/').length);
-            for (const folder of folders) {
-                appendLog(`Creating folder ${folder}...`);
-                await mp.createFolder(folder);
+                // Create folders first (unique, excluding root)
+                const folderSet = new Set<string>(firmwareFiles.map(f => f.folder || '/'));
+                const folders = Array.from(folderSet).filter(f => f && f !== '/');
+                // sort by depth so parents are created before children
+                folders.sort((a, b) => a.split('/').length - b.split('/').length);
+                for (const folder of folders) {
+                    appendLog(`Creating folder ${folder}...`);
+                    await mp.createFolder(folder);
+                }
+
+                for (const file of firmwareFiles) {
+                    await mp.uploadFile(file.path, file.content, (uploaded, total) => {
+                        const perc = Math.round((uploaded / total) * 100);
+                        appendOrUpdateLog(file.path, `Uploading ${file.path}: ${perc}% (${uploaded}/${total})`);
+                    });
+                }
+
+                appendLog('Firmware uploaded successfully.');
+                if (progressBar) progressBar.value = 100;
+                appendOrUpdateLog('overall', `Overall: 100% (${totalBytes}/${totalBytes} bytes)`);
+            } catch (err) {
+                console.error('Upload failed', err);
+                appendLog('Upload failed: ' + err);
+                alert('Upload failed: ' + err);
+            } finally {
+                if (wipeBadgeButton) wipeBadgeButton.disabled = false;
+                isUploading = false;
+                if (uploadFirmwareButton) uploadFirmwareButton.disabled = false;
+                setTimeout(() => {
+                    if (progressBar) progressBar.value = 0;
+                }, 2000);
+                appendLog('Upload process completed.');
             }
-
-            for (const file of firmwareFiles) {
-                await mp.uploadFile(file.path, file.content, (uploaded, total) => {
-                    const perc = Math.round((uploaded / total) * 100);
-                    appendOrUpdateLog(file.path, `Uploading ${file.path}: ${perc}% (${uploaded}/${total})`);
-                });
-            }
-
-            appendLog('Firmware uploaded successfully.');
-            if (progressBar) progressBar.value = 100;
-            appendOrUpdateLog('overall', `Overall: 100% (${totalBytes}/${totalBytes} bytes)`);
         } catch (err) {
-            console.error('Upload failed', err);
-            appendLog('Upload failed: ' + err);
-            alert('Upload failed: ' + err);
-        } finally {
-            if (wipeBadgeButton) wipeBadgeButton.disabled = false;
-            isUploading = false;
-            if (uploadFirmwareButton) uploadFirmwareButton.disabled = false;
-            setTimeout(() => {
-                if (progressBar) progressBar.value = 0;
-            }, 2000);
-            appendLog('Upload process completed.');
-        }
+            console.error('Wipe failed', err);
+            appendLog('Wipe failed: ' + err);
+            appendOrUpdateLog('wipe', 'Wipe failed: ' + err);
             alert('Wipe failed: ' + err);
         } finally {
             isUploading = false;
+            if (wipeBadgeButton) wipeBadgeButton.disabled = false;
+            if (progressBar) progressBar.value = 0;
+        }
+    });
+}
+// Wipe button: delete all files/folders on the device (destructive)
+if (wipeBadgeButton) {
+    wipeBadgeButton.addEventListener('click', async (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!mp) { alert('Not connected'); return; }
+        if (isUploading) {
+            if (!confirm('An upload/write is currently in progress. Wiping now will abort it. Continue?')) return;
+        }
+        if (!confirm('This will delete all files on the badge. Are you sure you want to continue?')) return;
+        try {
+            isUploading = true;
+            if (wipeBadgeButton) wipeBadgeButton.disabled = true;
+            clearLog();
+            appendOrUpdateLog('wipe', 'Starting wipe...');
+            appendLog('Wiping device filesystem...');
+            // removeFolder('/') will delete contents but won't remove the root directory
+            await mp.removeFolder('/');
+            appendLog('Wipe completed.');
+            appendOrUpdateLog('wipe', 'Wipe completed.');
+            alert('Wipe completed');
+        } catch (err) {
+            console.error('Wipe failed', err);
+            appendLog('Wipe failed: ' + err);
+            appendOrUpdateLog('wipe', 'Wipe failed: ' + err);
+            alert('Wipe failed: ' + err);
+        } finally {
+            isUploading = false;
+            if (wipeBadgeButton) wipeBadgeButton.disabled = false;
             if (progressBar) progressBar.value = 0;
         }
     });
@@ -750,41 +487,11 @@ if (updateBtn) {
 
             firmwareFiles = [];
 
-            // Preferred method: try to fetch a single firmware.zip first (simpler and preserves structure),
-            // then fall back to recursively traversing the repo contents if the zip isn't present.
-            const zipUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/firmware.zip?ref=main';
-            let triedZip = false;
-            try {
-                const zResp = await fetch(zipUrl);
-                if (zResp.ok) {
-                    triedZip = true;
-                    const json = await zResp.json();
-                    if (json && json.content) {
-                        const b64 = json.content as string;
-                        const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                        const blob = new Blob([binary]);
-                        // @ts-ignore
-                        const JSZip = (await import('jszip')).default;
-                        const jszip = new JSZip();
-                        const zip = await jszip.loadAsync(blob);
-                        const zipFiles = zip.files as any;
-                        for (const path in zipFiles) {
-                            const entry = zipFiles[path] as any;
-                            if (entry.dir) continue;
-                            if (path.startsWith('__MACOSX') || path.endsWith('.DS_Store')) continue;
-                            const content = await entry.async('uint8array');
-                            const p = '/' + path;
-                            firmwareFiles.push({ path: p, content, folder: getFolder(p) });
-                        }
-                    }
-                }
-            } catch (e) {
-                console.warn('Attempt to fetch firmware.zip failed:', e);
-            }
-
-            if (!triedZip || firmwareFiles.length === 0) {
-                // Recursive traversal fallback
-                const dirUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded?ref=main';
+            // Preferred method: fetch files directly from the code/embedded folder (recursive)
+            const dirUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded?ref=main';
+            let resp = await fetch(dirUrl);
+            if (resp.ok) {
+                // Recursively traverse directories to find files and keep folder structure
                 async function fetchGitHubDir(path: string) {
                     const url = `https://api.github.com/repos/mpkendall/prototype-badge/contents/${encodeURIComponent(path)}?ref=main`;
                     const r = await fetch(url);
@@ -794,12 +501,14 @@ if (updateBtn) {
                     for (const item of listing) {
                         if (item.type === 'file') {
                             if (!item.download_url) continue;
+                            // skip macOS system files and folder metadata
                             if ((item.path && item.path.indexOf('__MACOSX') !== -1) || (item.name && item.name.endsWith('.DS_Store'))) continue;
                             try {
                                 const fileResp = await fetch(item.download_url);
                                 if (!fileResp.ok) continue;
                                 const arrayBuf = await fileResp.arrayBuffer();
                                 const content = new Uint8Array(arrayBuf);
+                                // compute path relative to code/embedded and keep structure
                                 const rel = item.path.replace(/^code\/embedded\/?/, '');
                                 const p = '/' + rel;
                                 firmwareFiles.push({ path: p, content, folder: getFolder(p) });
@@ -808,44 +517,56 @@ if (updateBtn) {
                                 continue;
                             }
                         } else if (item.type === 'dir') {
+                            // recurse into subdirectory
                             await fetchGitHubDir(item.path);
                         }
                     }
                 }
-
                 try {
                     await fetchGitHubDir('code/embedded');
                 } catch (err) {
-                    console.warn('Recursive fetch failed, attempting top-level listing fallback:', err);
-                    const resp = await fetch(dirUrl);
-                    if (resp.ok) {
-                        const listing = await resp.json();
-                        if (Array.isArray(listing)) {
-                            for (const item of listing) {
-                                if (item.type !== 'file') continue;
-                                if (!item.download_url) continue;
-                                try {
-                                    const fileResp = await fetch(item.download_url);
-                                    if (!fileResp.ok) continue;
-                                    const arrayBuf = await fileResp.arrayBuffer();
-                                    const content = new Uint8Array(arrayBuf);
-                                    const p = '/' + item.name;
-                                    firmwareFiles.push({ path: p, content, folder: getFolder(p) });
-                                } catch (e) {
-                                    console.warn('Failed to download', item.download_url, e);
-                                }
-                            }
-                        }
+                    // If recursive fetch fails, fall back to the original behavior by trying to read the top level listing entries
+                    console.warn('Recursive fetch failed, falling back to listing:', err);
+                    const listing = await resp.json();
+                    if (!Array.isArray(listing)) throw new Error('Unexpected directory listing');
+                    for (const item of listing) {
+                        if (item.type !== 'file') continue;
+                        if (!item.download_url) continue;
+                        const fileResp = await fetch(item.download_url);
+                        if (!fileResp.ok) continue;
+                        const arrayBuf = await fileResp.arrayBuffer();
+                        const content = new Uint8Array(arrayBuf);
+                        const p = '/' + item.name;
+                        firmwareFiles.push({ path: p, content, folder: getFolder(p) });
                     }
                 }
-            }
-            // ensure uniqueness by path
-            {
-                const uniq = new Map<string, Uint8Array>();
-                for (const f of firmwareFiles) {
-                    uniq.set(f.path, f.content);
+            } else {
+                // Fallback: look for a single firmware zip in the code folder
+                const zipUrl = 'https://api.github.com/repos/mpkendall/prototype-badge/contents/code/embedded/firmware.zip?ref=main';
+                resp = await fetch(zipUrl);
+                if (resp.ok) {
+                    const json = await resp.json();
+                    if (!json.content) throw new Error('No content available in firmware.zip');
+                    const b64 = json.content;
+                    const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                    const blob = new Blob([binary]);
+                    // parse zip content
+                    // @ts-ignore
+                    const JSZip = (await import('jszip')).default;
+                    const jszip = new JSZip();
+                    const zip = await jszip.loadAsync(blob);
+                    const zipFiles = zip.files as any;
+                    for (const path in zipFiles) {
+                        const entry = zipFiles[path] as any;
+                        if (entry.dir) continue;
+                        if (path.startsWith('__MACOSX') || path.endsWith('.DS_Store')) continue;
+                        const content = await entry.async('uint8array');
+                        const p = '/' + path;
+                        firmwareFiles.push({ path: p, content, folder: getFolder(p) });
+                    }
+                } else {
+                    throw new Error('Firmware fetch failed: ' + resp.statusText);
                 }
-                firmwareFiles = [...uniq.entries()].map(([path, content]) => ({ path, content, folder: getFolder(path) }));
             }
             // Move VERSION to end
             const versionIndex = firmwareFiles.findIndex(f => f.path === '/VERSION');
@@ -853,6 +574,8 @@ if (updateBtn) {
                 const [versionFile] = firmwareFiles.splice(versionIndex, 1);
                 firmwareFiles.push(versionFile);
             }
+            appendOrUpdateLog('files', `files: ${firmwareFiles.map(f => f.path).join(', ')}`);
+            appendOrUpdateLog('folders', `folders: ${Array.from(new Set(firmwareFiles.map(f => f.folder))).join(', ')}`);
             appendLog('Latest firmware fetched and loaded (' + firmwareFiles.length + ' files)');
         } catch (err) {
             console.error('Update failed', err);
@@ -924,13 +647,6 @@ progressBar.className = 'w-full mt-2 h-2';
 if (updateButtonWrapper) updateButtonWrapper.appendChild(progressBar);
 
 const logEntries = new Map<string, HTMLDivElement>();
-function sanitizeForLog(s: string) {
-    // Keep printable ASCII and common whitespace, replace other bytes with hex markers
-    return s.replace(/[^\n\r\t\x20-\x7E]/g, (c) => {
-        const code = c.charCodeAt(0);
-        return `<0x${code.toString(16).padStart(2, '0')}>`;
-    });
-}
 
 function appendLog(msg: string) {
     const line = document.createElement('div');
@@ -959,4 +675,3 @@ function clearLog() {
     logEntries.clear();
     if (progressBar) progressBar.value = 0;
 }
-
