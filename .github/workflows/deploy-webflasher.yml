@@ -17,6 +17,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Debug: list repository files
+        run: |
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la
+          ls -la code || true
+          ls -la code/web-flasher || true
+
+      - name: Check package.json
+        run: |
+          if [ ! -f code/web-flasher/package.json ]; then echo "Missing package.json at code/web-flasher/package.json"; ls -la code/web-flasher || true; exit 1; fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -50,6 +63,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Debug: list publish directory
+        run: |
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la ./code/web-flasher/dist || true
 
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3
