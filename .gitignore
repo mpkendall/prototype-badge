@@ -59,5 +59,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-code/web-flasher/package-lock.json
-code/web-flasher/package.json
