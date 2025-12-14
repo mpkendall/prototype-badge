@@ -1,79 +1,53 @@
-name: Deploy Web Flasher
+name: deploy web-flasher
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches:
+      - main
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build artifact
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Debug: list repository files
-        run: |
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          ls -la
-          ls -la code || true
-          ls -la code/web-flasher || true
-
-      - name: Check package.json
-        run: |
-          if [ ! -f code/web-flasher/package.json ]; then echo "Missing package.json at code/web-flasher/package.json"; ls -la code/web-flasher || true; exit 1; fi
-
-      - name: Setup Node.js
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('code/web-flasher/package-lock.json','code/web-flasher/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web-flasher/package-lock.json
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
-        working-directory: code/web-flasher
+        working-directory: ./code/web-flasher
+        run: npm ci
 
-      - name: Build
+      - name: Build site
+        working-directory: ./code/web-flasher
         run: npm run build
-        working-directory: code/web-flasher
 
-      - name: Verify build output
-        run: |
-          if [ ! -d code/web-flasher/dist ]; then echo "Build output not found: code/web-flasher/dist"; ls -la code/web-flasher || true; exit 1; fi
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: code/web-flasher/dist
 
   deploy:
-    name: Deploy to gh-pages
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Debug: list publish directory
-        run: |
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          ls -la ./code/web-flasher/dist || true
-
-      - name: Deploy to gh-pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          publish_dir: ./code/web-flasher/dist
-          publish_branch: gh-pages
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
