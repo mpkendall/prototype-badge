@@ -6,4 +6,13 @@ export default defineConfig({
     tailwindcss(),
   ],
   base: '/',
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        flash: 'flash.html',
+        usb: 'usb.html',
+      },
+    },
+  },
 })
