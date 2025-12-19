@@ -28,8 +28,44 @@ class DisplayManager:
         self.display = einkdriver.EPD(self.spi, self.cs, self.dc, self.rst, self.busy)
         self.display.init()
 
-    def show(self):
-        self.display.display()
+    def _rotate_buffer(self, angle: int):
+        """
+        Rotate the current frame buffer by the requested angle (clockwise degrees).
+        Only 0/90/180/270 are supported; other values fall back to no rotation.
+        """
+        angle = angle % 360
+        if angle == 0:
+            return self.display.buffer
+
+        width = self.display.width
+        height = self.display.height
+
+        # Destination dimensions; this panel is square so width/height stay 200, but keep generic.
+        dst_w = height if angle in (90, 270) else width
+        dst_h = width if angle in (90, 270) else height
+
+        src_fb = framebuf.FrameBuffer(self.display.buffer, width, height, framebuf.MONO_HLSB)
+        dst_buffer = bytearray(len(self.display.buffer))
+        dst_fb = framebuf.FrameBuffer(dst_buffer, dst_w, dst_h, framebuf.MONO_HLSB)
+
+        for y in range(height):
+            for x in range(width):
+                color = src_fb.pixel(x, y)
+                if angle == 90:
+                    nx, ny = height - 1 - y, x
+                elif angle == 180:
+                    nx, ny = width - 1 - x, height - 1 - y
+                elif angle == 270:
+                    nx, ny = y, width - 1 - x
+                else:
+                    nx, ny = x, y
+                dst_fb.pixel(nx, ny, color)
+
+        return dst_buffer
+
+    def show(self, *, rotate: int = 0):
+        buffer = self._rotate_buffer(rotate)
+        self.display.display(buffer)
 
     def fill(self, color):
         self.display.fill(color)

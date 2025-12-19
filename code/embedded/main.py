@@ -188,7 +188,7 @@ def check_button_and_read():
                     display.fill(1)
                     display.nice_text("Config\nSaved!", 10, 10, font=32)
                     display.nice_text(config.get("userName", "")[:15], 10, 80, font=24)
-                    display.show()
+                    display.show(rotate=90)
                     time.sleep(2)
                     # Reset to show new badge
                     import machine
@@ -299,7 +299,7 @@ else:
     display.fill_rect(0, 50, 200, 5, 0)
     display.nice_text("badge.blueprint\n.hackclub.com", 10, 70, font=24)
 
-display.show()
+display.show(rotate=-90)
 
 # Main loop - continuously monitor button for photodiode reading
 print("Badge displayed. Hold button (GPIO 13) to read new config from photodiode...")
