@@ -8,41 +8,15 @@ class NFCManager():
     def read_page(self, page):
         """
         Reads a single 16-byte page from the NT3H2111/2211.
-        Tries a few different I2C methods to be compatible with different
-        MicroPython / board implementations.
         """
         try:
-            # 1) If the I2C has a readfrom_mem helper, use it (clean register read)
-            if hasattr(self.i2c, 'readfrom_mem'):
-                try:
-                    return self.i2c.readfrom_mem(self.address, page, 16)
-                except Exception:
-                    # fall through to other methods
-                    pass
-
-            # 2) Use writeto_then_readfrom (repeated start) if available
             if hasattr(self.i2c, 'writeto_then_readfrom'):
                 buffer = bytearray(16)
-                try:
-                    self.i2c.writeto_then_readfrom(self.address, bytes([page]), buffer)
-                    return buffer
-                except Exception:
-                    # fall through
-                    pass
-
-            # 3) Fallback: write the page address then read (may send STOP)
-            # Some I2C implementations don't accept a stop= keyword, so call
-            # writeto with the address-only argument and then readfrom.
-            try:
-                self.i2c.writeto(self.address, bytes([page]))
+                self.i2c.writeto_then_readfrom(self.address, bytes([page]), buffer)
+                return buffer
+            else:
+                self.i2c.writeto(self.address, bytes([page]), stop=False)
                 return self.i2c.readfrom(self.address, 16)
-            except TypeError:
-                # older/alternate signatures — try again without extra params
-                try:
-                    self.i2c.writeto(self.address, bytes([page]))
-                    return self.i2c.readfrom(self.address, 16)
-                except Exception as e:
-                    raise e
         except Exception as e:
             print(f"NFC Read Error on page {page}: {e}")
             return None
@@ -58,10 +32,7 @@ class NFCManager():
         try:
             self.i2c.writeto(self.address, bytes([page]) + data)
             # Datasheet specifies a write time (T_write) of max 5ms
-            if hasattr(time, 'sleep_ms'):
-                time.sleep_ms(5)
-            else:
-                time.sleep(0.005)
+            time.sleep_ms(5) 
             return True
         except Exception as e:
             print(f"NFC Write Error on page {page}: {e}")
