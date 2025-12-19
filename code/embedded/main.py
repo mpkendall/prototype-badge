@@ -295,9 +295,9 @@ if configured:
     display.fill_rect(0, 155, 200, 5, 0)
     display.blit(logo, 0, 170)
 else:
-    display.nice_text("Not Configured!", 10, 10, font=24)
-    display.fill_rect(0, 50, 200, 5, 0)
-    display.nice_text("badge.blueprint\n.hackclub.com", 10, 70, font=24)
+    display.nice_text("Firmware Flashed!", 0, 10, font=24)
+    display.fill_rect(0, 50, 200, 4, 0)
+    display.nice_text("Enter your details\non the flasher to and\nhit \"save\" to see it!", 10, 70, font=18)
 
 display.show(rotate=-90)
 
