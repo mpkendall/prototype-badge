@@ -125,7 +125,7 @@ function setConnectedAppearance() {
 }
 
 function setDisconnectedAppearance() {
-    btn.textContent = "Connect";
+    btn.textContent = "1. Connect";
     btn.classList.remove("bg-red-900", "hover:bg-red-700");
     btn.classList.add("bg-green-700", "hover:bg-green-600");
     if (saveConfigButton) saveConfigButton.disabled = true;
