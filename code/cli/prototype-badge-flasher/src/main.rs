@@ -169,11 +169,13 @@ fn scan_devices(app: &mut App) {
 			let p = Path::new(candidate);
 			if p.exists() {
 				if p.is_dir() {
-					for entry in p.read_dir().into_iter().flatten() {
-						let path = entry.path();
-						// on Linux /run/media/$USER/<label>
-						if path.is_dir() {
-							roots.push(path);
+					if let Ok(entries) = p.read_dir() {
+						for entry in entries.flatten() {
+							let path = entry.path();
+							// on Linux /run/media/$USER/<label>
+							if path.is_dir() {
+								roots.push(path);
+							}
 						}
 					}
 				}
