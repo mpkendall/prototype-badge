@@ -246,7 +246,7 @@ fn run_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: A
 
 			let outer = Block::default()
 				.borders(Borders::ALL)
-				.title("RP2040 Flasher — Minimal TUI")
+				.title("Prototype Badge TUI")
 				.style(Style::default().fg(Color::White));
 			f.render_widget(outer, size);
 
@@ -258,7 +258,7 @@ fn run_loop<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: A
             // Tabs
             let titles = vec!["UF2 Flasher", "Serial Update"];
             let tabs = Tabs::new(titles)
-                .block(Block::default().borders(Borders::ALL).title("Mode"))
+                .block(Block::default().borders(Borders::ALL).title("Mode (Tab to switch)"))
                 .highlight_style(Style::default().fg(Color::Yellow))
                 .select(match app.current_tab { Tab::Uf2Flasher => 0, Tab::SerialUpdate => 1 });
             f.render_widget(tabs, main_layout[0]);
